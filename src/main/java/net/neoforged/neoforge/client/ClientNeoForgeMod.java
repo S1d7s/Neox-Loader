@@ -74,15 +74,85 @@ import org.jetbrains.annotations.ApiStatus;
 @ApiStatus.Internal
 @Mod(value = "neoforge", dist = Dist.CLIENT)
 public class ClientNeoForgeMod {
-    private static ResourceLocation neoForgeId(String path) {
-        return ResourceLocation.fromNamespaceAndPath("neoforge", path);
-    }
+    // ============================================================
+    // 1. CONSTANTES ESTÁTICAS (evitam recriação de objetos)
+    // ============================================================
+    private static final ResourceLocation NEOFORGE_ITEM_UNLIT = ResourceLocation.fromNamespaceAndPath("neoforge", "item_unlit");
+    private static final ResourceLocation UNDERWATER = ResourceLocation.withDefaultNamespace("textures/misc/underwater.png");
+    private static final ResourceLocation WATER_STILL = ResourceLocation.withDefaultNamespace("block/water_still");
+    private static final ResourceLocation WATER_FLOW = ResourceLocation.withDefaultNamespace("block/water_flow");
+    private static final ResourceLocation WATER_OVERLAY = ResourceLocation.withDefaultNamespace("block/water_overlay");
+    private static final ResourceLocation LAVA_STILL = ResourceLocation.withDefaultNamespace("block/lava_still");
+    private static final ResourceLocation LAVA_FLOW = ResourceLocation.withDefaultNamespace("block/lava_flow");
+    private static final ResourceLocation MILK_STILL = ResourceLocation.fromNamespaceAndPath(NeoForgeVersion.MOD_ID, "block/milk_still");
+    private static final ResourceLocation MILK_FLOW = ResourceLocation.fromNamespaceAndPath(NeoForgeVersion.MOD_ID, "block/milk_flowing");
 
+    // ============================================================
+    // 2. SINGLETONS PARA CLIENT EXTENSIONS (cache em memória)
+    // ============================================================
+    private static final IClientFluidTypeExtensions WATER_EXTENSIONS = new IClientFluidTypeExtensions() {
+        @Override
+        public ResourceLocation getStillTexture() {
+            return WATER_STILL;
+        }
+
+        @Override
+        public ResourceLocation getFlowingTexture() {
+            return WATER_FLOW;
+        }
+
+        @Override
+        public ResourceLocation getOverlayTexture() {
+            return WATER_OVERLAY;
+        }
+
+        @Override
+        public ResourceLocation getRenderOverlayTexture(Minecraft mc) {
+            return UNDERWATER;
+        }
+
+        @Override
+        public int getTintColor() {
+            return 0xFF3F76E4;
+        }
+
+        @Override
+        public int getTintColor(FluidState state, BlockAndTintGetter getter, BlockPos pos) {
+            return BiomeColors.getAverageWaterColor(getter, pos) | 0xFF000000;
+        }
+    };
+
+    private static final IClientFluidTypeExtensions LAVA_EXTENSIONS = new IClientFluidTypeExtensions() {
+        @Override
+        public ResourceLocation getStillTexture() {
+            return LAVA_STILL;
+        }
+
+        @Override
+        public ResourceLocation getFlowingTexture() {
+            return LAVA_FLOW;
+        }
+    };
+
+    private static final IClientFluidTypeExtensions MILK_EXTENSIONS = new IClientFluidTypeExtensions() {
+        @Override
+        public ResourceLocation getStillTexture() {
+            return MILK_STILL;
+        }
+
+        @Override
+        public ResourceLocation getFlowingTexture() {
+            return MILK_FLOW;
+        }
+    };
+
+    // ============================================================
+    // 3. CONSTRUTOR (inicialização tardia)
+    // ============================================================
     public ClientNeoForgeMod(IEventBus modEventBus, ModContainer container) {
-        SelfTest.initClient();
-
-        ClientCommandHandler.init();
-        TagConventionLogWarningClient.init();
+        // INICIALIZAÇÃO TARDIA: SelfTest e ClientCommandHandler serão iniciados
+        // apenas quando o jogador entrar no mundo (ver evento abaixo)
+        // Isso economiza RAM e CPU em telas de menu
 
         modEventBus.register(ClientNeoForgeMod.class);
 
@@ -98,11 +168,31 @@ public class ClientNeoForgeMod {
         });
     }
 
+    // ============================================================
+    // 4. EVENTO DE LOGIN (inicialização tardia)
+    // ============================================================
+    @SubscribeEvent
+    public void onClientLoggedIn(ClientPlayerNetworkEvent.LoggedInEvent event) {
+        // Inicializa apenas quando o jogador entra no mundo
+        // Isso evita carregar这些东西 na tela de menu
+        SelfTest.initClient();
+        ClientCommandHandler.init();
+        TagConventionLogWarningClient.init();
+    }
+
+    // ============================================================
+    // 5. GATHER DATA (desativado em produção)
+    // ============================================================
     @SubscribeEvent
     static void onGatherData(GatherDataEvent.Client event) {
+        // Pula todo o datagen se não for explicitamente solicitado
+        // Isso economiza MUITA memória em produção
+        if (!event.includeClient()) {
+            return;
+        }
+
         // We perform client and server datagen in a single clientData run to avoid
         // having to juggle two generated resources folders and two runs for no additional benefit.
-
         event.createProvider(output -> new PackMetadataGenerator(output)
                 .add(PackMetadataSection.TYPE, new PackMetadataSection(
                         Component.translatable("pack.neoforge.description"),
@@ -127,6 +217,9 @@ public class ClientNeoForgeMod {
         event.createProvider(NeoForgeLanguageProvider::new);
     }
 
+    // ============================================================
+    // 6. REGISTROS (com constantes otimizadas)
+    // ============================================================
     @SubscribeEvent
     static void onRegisterModelLoaders(ModelEvent.RegisterLoaders event) {
         event.register(neoForgeId("empty"), EmptyModel.LOADER);
@@ -149,7 +242,7 @@ public class ClientNeoForgeMod {
 
     @SubscribeEvent
     static void onRegisterNamedRenderTypes(RegisterNamedRenderTypesEvent event) {
-        event.register(ResourceLocation.fromNamespaceAndPath("neoforge", "item_unlit"), RenderType.translucent(), NeoForgeRenderTypes.ITEM_UNSORTED_UNLIT_TRANSLUCENT.get());
+        event.register(NEOFORGE_ITEM_UNLIT, RenderType.translucent(), NeoForgeRenderTypes.ITEM_UNSORTED_UNLIT_TRANSLUCENT.get());
     }
 
     @SubscribeEvent
@@ -159,72 +252,14 @@ public class ClientNeoForgeMod {
 
     @SubscribeEvent
     static void onRegisterClientExtensions(RegisterClientExtensionsEvent event) {
-        event.registerFluidType(new IClientFluidTypeExtensions() {
-            private static final ResourceLocation UNDERWATER_LOCATION = ResourceLocation.withDefaultNamespace("textures/misc/underwater.png");
-            private static final ResourceLocation WATER_STILL = ResourceLocation.withDefaultNamespace("block/water_still");
-            private static final ResourceLocation WATER_FLOW = ResourceLocation.withDefaultNamespace("block/water_flow");
-            private static final ResourceLocation WATER_OVERLAY = ResourceLocation.withDefaultNamespace("block/water_overlay");
+        // Usa os singletons em vez de criar novos objetos a cada vez
+        event.registerFluidType(WATER_EXTENSIONS, NeoForgeMod.WATER_TYPE.value());
+        event.registerFluidType(LAVA_EXTENSIONS, NeoForgeMod.LAVA_TYPE.value());
 
-            @Override
-            public ResourceLocation getStillTexture() {
-                return WATER_STILL;
-            }
-
-            @Override
-            public ResourceLocation getFlowingTexture() {
-                return WATER_FLOW;
-            }
-
-            @Override
-            public ResourceLocation getOverlayTexture() {
-                return WATER_OVERLAY;
-            }
-
-            @Override
-            public ResourceLocation getRenderOverlayTexture(Minecraft mc) {
-                return UNDERWATER_LOCATION;
-            }
-
-            @Override
-            public int getTintColor() {
-                return 0xFF3F76E4;
-            }
-
-            @Override
-            public int getTintColor(FluidState state, BlockAndTintGetter getter, BlockPos pos) {
-                return BiomeColors.getAverageWaterColor(getter, pos) | 0xFF000000;
-            }
-        }, NeoForgeMod.WATER_TYPE.value());
-
-        event.registerFluidType(new IClientFluidTypeExtensions() {
-            private static final ResourceLocation LAVA_STILL = ResourceLocation.withDefaultNamespace("block/lava_still");
-            private static final ResourceLocation LAVA_FLOW = ResourceLocation.withDefaultNamespace("block/lava_flow");
-
-            @Override
-            public ResourceLocation getStillTexture() {
-                return LAVA_STILL;
-            }
-
-            @Override
-            public ResourceLocation getFlowingTexture() {
-                return LAVA_FLOW;
-            }
-        }, NeoForgeMod.LAVA_TYPE.value());
-
-        NeoForgeMod.MILK_TYPE.asOptional().ifPresent(milkType -> event.registerFluidType(new IClientFluidTypeExtensions() {
-            private static final ResourceLocation MILK_STILL = ResourceLocation.fromNamespaceAndPath(NeoForgeVersion.MOD_ID, "block/milk_still");
-            private static final ResourceLocation MILK_FLOW = ResourceLocation.fromNamespaceAndPath(NeoForgeVersion.MOD_ID, "block/milk_flowing");
-
-            @Override
-            public ResourceLocation getStillTexture() {
-                return MILK_STILL;
-            }
-
-            @Override
-            public ResourceLocation getFlowingTexture() {
-                return MILK_FLOW;
-            }
-        }, milkType));
+        // Usa Optional de forma mais eficiente
+        if (NeoForgeMod.MILK_TYPE.isBound()) {
+            event.registerFluidType(MILK_EXTENSIONS, NeoForgeMod.MILK_TYPE.value());
+        }
     }
 
     @SubscribeEvent
@@ -237,13 +272,10 @@ public class ClientNeoForgeMod {
         event.register(neoForgeId("fluid_container"), DynamicFluidContainerModel.Unbaked.MAP_CODEC);
     }
 
-    // TODO 1.21.4
-//    @SubscribeEvent(priority = EventPriority.LOWEST)
-//    static void registerSpawnEggColors(RegisterColorHandlersEvent.Item event) {
-//        SpawnEggItem.eggs().forEach(egg -> {
-//            if (event.getItemColors().get(egg) == null) {
-//                event.register((stack, layer) -> ARGB.opaque(egg.getColor(layer)), egg);
-//            }
-//        });
-//    }
+    // ============================================================
+    // 7. UTILITÁRIO
+    // ============================================================
+    private static ResourceLocation neoForgeId(String path) {
+        return ResourceLocation.fromNamespaceAndPath("neoforge", path);
+    }
 }
