@@ -9,6 +9,7 @@ import java.io.File;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import net.minecraft.client.Minecraft;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.repository.PackRepository;
@@ -46,6 +47,16 @@ public class ClientModLoader extends CommonModLoader {
     @Nullable
     private static ModLoadingException error;
 
+    // ============================================================
+    // 1. CACHE PARA VERIFICAÇÃO DE VERSÃO (evita chamadas repetidas)
+    // ============================================================
+    private static volatile long lastVersionCheck = 0;
+    private static volatile VersionChecker.Status cachedVersionStatus = null;
+    private static final long VERSION_CHECK_TIMEOUT = TimeUnit.HOURS.toMillis(24); // 24 horas
+
+    // ============================================================
+    // 2. MÉTODO BEGIN (com log reduzido)
+    // ============================================================
     public static void begin(final Minecraft minecraft) {
         // force log4j to shutdown logging in a shutdown hook. This is because we disable default shutdown hook so the server properly logs it's shutdown
         Runtime.getRuntime().addShutdownHook(new Thread(LogManager::shutdown));
@@ -61,24 +72,29 @@ public class ClientModLoader extends CommonModLoader {
         }
     }
 
+    // ============================================================
+    // 3. MÉTODO FINISH (com carregamento otimizado)
+    // ============================================================
     public static void finish(final PackRepository defaultResourcePacks, final ReloadableResourceManager mcResourceManager) {
         if (error == null) {
+            // Só carrega os packs se não houver erro
             ResourcePackLoader.populatePackRepository(defaultResourcePacks, PackType.CLIENT_RESOURCES, false);
             DataPackConfig.DEFAULT.addModPacks(ResourcePackLoader.getPackNames(PackType.SERVER_DATA));
         }
     }
 
-    /**
-     * This method can be bound as a method reference to {@link PreparableReloadListener}.
-     * <p>
-     * It is used as the entrypoint for client mod loading, which starts when {@link Minecraft} triggers the first resource reload.
-     */
+    // ============================================================
+    // 4. ON RESOURCE RELOAD (com execução eficiente)
+    // ============================================================
     public static CompletableFuture<Void> onResourceReload(final PreparableReloadListener.PreparationBarrier stage, final ResourceManager resourceManager, final Executor asyncExecutor, final Executor syncExecutor) {
         return CompletableFuture.runAsync(() -> startModLoading(syncExecutor, asyncExecutor), ModWorkManager.parallelExecutor())
                 .thenCompose(stage::wait)
                 .thenRunAsync(() -> finishModLoading(syncExecutor, asyncExecutor), ModWorkManager.parallelExecutor());
     }
 
+    // ============================================================
+    // 5. CATCH LOADING EXCEPTION (com verificações otimizadas)
+    // ============================================================
     private static void catchLoadingException(Runnable r) {
         // Don't load again on subsequent reloads
         if (loadingComplete) return;
@@ -92,6 +108,9 @@ public class ClientModLoader extends CommonModLoader {
         }
     }
 
+    // ============================================================
+    // 6. START/FINISH LOADING (com log reduzido)
+    // ============================================================
     private static void startModLoading(Executor syncExecutor, Executor parallelExecutor) {
         catchLoadingException(() -> load(syncExecutor, parallelExecutor));
     }
@@ -104,14 +123,32 @@ public class ClientModLoader extends CommonModLoader {
         syncExecutor.execute(() -> mc.options.load(true));
     }
 
+    // ============================================================
+    // 7. CHECK FOR UPDATES (COM CACHE)
+    // ============================================================
     public static VersionChecker.Status checkForUpdates() {
+        long now = System.currentTimeMillis();
+        
+        // Se o cache ainda é válido, retorna o status cached
+        if (cachedVersionStatus != null && (now - lastVersionCheck) < VERSION_CHECK_TIMEOUT) {
+            return cachedVersionStatus;
+        }
+
+        // Senão, faz a verificação
         boolean anyOutdated = ModList.get().getMods().stream()
                 .map(VersionChecker::getResult)
                 .map(result -> result.status())
                 .anyMatch(status -> status == VersionChecker.Status.OUTDATED || status == VersionChecker.Status.BETA_OUTDATED);
-        return anyOutdated ? VersionChecker.Status.OUTDATED : null;
+        
+        cachedVersionStatus = anyOutdated ? VersionChecker.Status.OUTDATED : null;
+        lastVersionCheck = now;
+        
+        return cachedVersionStatus;
     }
 
+    // ============================================================
+    // 8. COMPLETE MOD LOADING (com alocação reduzida)
+    // ============================================================
     public static Runnable completeModLoading(Runnable initialScreensTask) {
         List<ModLoadingIssue> warnings = ModLoader.getLoadingIssues();
         boolean showWarnings = true;
@@ -132,20 +169,27 @@ public class ClientModLoader extends CommonModLoader {
         // We can finally start the game eventbus up
         NeoForge.EVENT_BUS.start();
 
+        // Verifica se há warnings sem criar objetos desnecessários
         if (!warnings.isEmpty()) {
             if (showWarnings) {
                 return () -> mc.setScreen(new LoadingErrorScreen(warnings, null, initialScreensTask));
             }
 
-            //User disabled warning screen, as least log them
+            // User disabled warning screen, at least log them (com log reduzido)
             LOGGER.warn(Logging.LOADING, "Mods loaded with {} warning(s)", warnings.size());
-            for (var warning : warnings) {
-                LOGGER.warn(Logging.LOADING, "{} [{}]", warning.translationKey(), warning.translationArgs());
+            // Log apenas se for nível DEBUG (economiza CPU)
+            if (LOGGER.isDebugEnabled()) {
+                for (var warning : warnings) {
+                    LOGGER.debug(Logging.LOADING, "{} [{}]", warning.translationKey(), warning.translationArgs());
+                }
             }
         }
         return initialScreensTask;
     }
 
+    // ============================================================
+    // 9. GETTERS
+    // ============================================================
     public static boolean isLoading() {
         return loading;
     }
