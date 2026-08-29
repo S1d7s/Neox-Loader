@@ -181,13 +181,13 @@ public class ClientNeoForgeMod {
     }
 
     // ============================================================
-    // 5. GATHER DATA (desativado em produção)
+    // 5. GATHER DATA (otimizado - verifica includeServer)
     // ============================================================
     @SubscribeEvent
     static void onGatherData(GatherDataEvent.Client event) {
-        // Pula todo o datagen se não for explicitamente solicitado
-        // Isso economiza MUITA memória em produção
-        if (!event.includeClient()) {
+        // Pula o datagen se não for para gerar dados do cliente
+        // CORREÇÃO: usa includeServer() em vez de includeClient()
+        if (!event.includeServer()) {
             return;
         }
 
@@ -278,4 +278,4 @@ public class ClientNeoForgeMod {
     private static ResourceLocation neoForgeId(String path) {
         return ResourceLocation.fromNamespaceAndPath("neoforge", path);
     }
-}
+    }
